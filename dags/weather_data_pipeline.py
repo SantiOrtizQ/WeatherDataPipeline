@@ -5,6 +5,9 @@ from datetime import datetime
 import requests
 import logging
 from io import StringIO
+import pandas as pd
+import json
+
 # postgresHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
@@ -12,7 +15,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
 #variables from config
-from include.config import CONN_ID, RAW_DATA_NAME, BUCKET_NAME
+from include.config import CONN_ID, RAW_DATA_NAME, BUCKET_NAME, CITIES, API_key
 
 
 #create logger
@@ -21,35 +24,60 @@ logger=logging.getLogger(__name__)
 
 @task
 def fetch_weather_data():
-    response=requests.get("http://api.openweathermap.org/geo/1.0/direct?q=London&appid=dc4d36eaf2e989621f13e835fbc190a4")
-    if response.status_code==200:
-        data=response.json()
-        logger.info("Successfully retrieved data")
-        return data
-    else:
-        raise TimeoutError("Data could not be retrieved from API")
+    #create locations info dataframe
+    locations=pd.DataFrame(columns=["City", "Latitude", "Longitude", "Country"])
+
+    #get locations info from API
+    for city in CITIES:
+        #get response
+        response=requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={API_key}")
+        if response.status_code==200:
+            #convert to json and extract element from the default list
+            data=response.json()[0]
+
+            #delete unwanted info
+            data.pop('local_names', 0)
+            data.pop("state", 0)
+            
+            # save into dataframe
+            locations.loc[len(locations)]=data.values()
+        else:
+            raise TimeoutError("Data could not be retrieved from API.")
+    
+    logger.info("Successfully retrieved locations data.")
+
+
+    # get weather info from API
+    weather_info={}
+    latlon=locations[["Latitude", "Longitude"]]     # extract latitude and longitude from dataframe
+    size=len(latlon)
+    for i in range(size):
+        # get info
+        response=requests.get(f"http://api.openweathermap.org/data/2.5/forecast?lat={float(latlon.iat[i, 0])}&lon={float(latlon.iat[i, 1])}&appid={API_key}")
+        if response.status_code==200:
+            logger.info("Weather info extracted correctly")
+            # save weather data into dictionary
+            weather_info[locations.iat[i, 0]]=response.json()
+        else:
+            raise TimeoutError("Weather data could not be extracted.")
+    
+    # return json file
+    return json.dumps(weather_info)
+
 
 @task
 def store_raw_s3(data):
-    # check if data is empty
-    if not data:
-        raise ValueError("")
-    
-    # define hook
     hook=S3Hook(aws_conn_id=CONN_ID)
 
-    data=str(data)[1:-1]
-    # define buffer
-    buffer=StringIO()
-
-    #load file into S3
     hook.load_string(
         string_data=data,
         key=RAW_DATA_NAME,
         bucket_name=BUCKET_NAME,
         replace=True
     )
+
     logger.info("Successfully loaded data into S3 Bucket.")
+
 
 @task
 def transform_weather_data():
