@@ -1,10 +1,7 @@
-from fileinput import filename
-
 from airflow.sdk import task, chain, dag
 from datetime import datetime
 import requests
 import logging
-from io import StringIO
 import pandas as pd
 import json
 
@@ -53,11 +50,14 @@ def fetch_weather_data():
     size=len(latlon)
     for i in range(size):
         # get info
-        response=requests.get(f"http://api.openweathermap.org/data/2.5/forecast?lat={float(latlon.iat[i, 0])}&lon={float(latlon.iat[i, 1])}&appid={API_key}")
+        response=requests.get(f"http://api.openweathermap.org/data/2.5/weather?lat={float(latlon.iat[i, 0])}&lon={float(latlon.iat[i, 1])}&appid={API_key}")
         if response.status_code==200:
             logger.info("Weather info extracted correctly")
             # save weather data into dictionary
-            weather_info[locations.iat[i, 0]]=response.json()
+            weather_response=response.json()
+            weather_sum={"weather": weather_response["main"]}
+            weather_sum["weather"]["timestamp"]=weather_response["dt"]
+            weather_info[locations.iat[i, 0]]=weather_sum
         else:
             raise TimeoutError("Weather data could not be extracted.")
     
