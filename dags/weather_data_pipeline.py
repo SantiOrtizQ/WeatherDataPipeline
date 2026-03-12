@@ -4,7 +4,7 @@ import requests
 import logging
 import pandas as pd
 import json
-
+from io import StringIO
 # postgresHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
@@ -12,7 +12,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
 #variables from config
-from include.config import CONN_ID, RAW_DATA_NAME, BUCKET_NAME, CITIES, API_key
+from include.config import CONN_ID, RAW_DATA_NAME, BUCKET_NAME, CITIES, API_key, CSV_FILE_NAME
 
 
 #create logger
@@ -27,7 +27,7 @@ def fetch_weather_data():
     #get locations info from API
     for city in CITIES:
         #get response
-        response=requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={API_key}")
+        response=requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={API_key}&units=metric")
         if response.status_code==200:
             #convert to json and extract element from the default list
             data=response.json()[0]
@@ -62,7 +62,7 @@ def fetch_weather_data():
             raise TimeoutError("Weather data could not be extracted.")
     
     # return json file
-    return json.dumps(weather_info)
+    return weather_info
 
 
 @task
@@ -70,22 +70,48 @@ def store_raw_s3(data):
     hook=S3Hook(aws_conn_id=CONN_ID)
 
     hook.load_string(
-        string_data=data,
+        string_data=json.dumps(data),
         key=RAW_DATA_NAME,
         bucket_name=BUCKET_NAME,
         replace=True
     )
 
     logger.info("Successfully loaded data into S3 Bucket.")
+    return data
+
+
+#transform raw json data into csv
+@task
+def transform_weather_data(jsondict):
+    # get columns for dataframe
+    df_columns=["city"]+list(list(list(jsondict.values())[0].values())[0].keys())
+    df=pd.DataFrame(columns=df_columns)
+    for city in jsondict:
+        # flat data
+        data=[city]+list(jsondict[city]["weather"].values())
+        # save data into df
+        logger.info(f"Info:{data}")
+        df.loc[len(df)]=data
+    
+    #converting timestamp
+    df["timestamp"]=pd.to_datetime(df["timestamp"], unit='s')
+    return df
+
 
 
 @task
-def transform_weather_data():
-    pass
+def load_to_postgres(df):
+    # create file
+    file=StringIO()
+    df.to_csv(file, index=False)
+    hook=S3Hook(aws_conn_id=CONN_ID)
 
-@task
-def load_to_postgres():
-    pass
+    hook.load_string(
+        string_data=file.getvalue(),
+        key=CSV_FILE_NAME,
+        bucket_name=BUCKET_NAME,
+        replace=True
+    )
 
 
 
@@ -96,14 +122,15 @@ def load_to_postgres():
     start_date=datetime(2026, 3, 1),
     schedule="@hourly",
     description="This DAG ingest data from a weather API and process it\
-        through AWS databases to finally load it into postgres."
+        through AWS databases to finally load it into postgres.",
+    catchup=False
 )
 def weather_data_pipeline():
     
     fetch=fetch_weather_data()
     store=store_raw_s3(fetch)
-    transform=transform_weather_data()
-    load=load_to_postgres()
+    transform=transform_weather_data(store)
+    load=load_to_postgres(transform)
 
     chain(fetch, store, transform, load)
 
