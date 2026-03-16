@@ -7,5 +7,5 @@ POSTGRES_CONN_ID="postgres_default"
 RAW_DATA_NAME=f"raw/raw_data_{today}.json"
 PROCESSED_FILE_NAME=f"processed/processed_data_{today}.csv"
 BUCKET_NAME="weather-data-pipeline-bucket1"
-CITIES=["London", "Bogota", "New York", "Buenos Aires"]
+CITIES=["London", "Bogota", "New York", "Buenos Aires", "Paris", "Madrid", "Milan", "Lima"]
 API_key="dc4d36eaf2e989621f13e835fbc190a4"

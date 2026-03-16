@@ -1,13 +1,13 @@
-from fileinput import filename
-
 from airflow.sdk import task, chain, dag
 from datetime import datetime
-from more_itertools import bucket
-import requests
+
 import logging
 import pandas as pd
 import json
 from io import StringIO
+
+#load tasks
+from include.longtasks import fetch_data, transform_data
 
 # postgresHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -16,59 +16,27 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
 #variables from config
-from include.config import CONN_ID, RAW_DATA_NAME, BUCKET_NAME, CITIES, API_key, PROCESSED_FILE_NAME, POSTGRES_CONN_ID
+from include.config import CONN_ID, RAW_DATA_NAME, BUCKET_NAME, PROCESSED_FILE_NAME, POSTGRES_CONN_ID
 
 
 #create logger
 logger=logging.getLogger(__name__)
+
+
+
 ''' --- DEFINE ALL TASKS --- '''
 
+# GET DATA FROM API
 @task
 def fetch_weather_data():
-    #create locations info dataframe
-    locations=pd.DataFrame(columns=["City", "Latitude", "Longitude", "Country"])
-
-    #get locations info from API
-    for city in CITIES:
-        #get response
-        response=requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={API_key}&units=metric")
-        if response.status_code==200:
-            #convert to json and extract element from the default list
-            data=response.json()[0]
-
-            #delete unwanted info
-            data.pop('local_names', 0)
-            data.pop("state", 0)
-            
-            # save into dataframe
-            locations.loc[len(locations)]=data.values()
-        else:
-            raise TimeoutError("Data could not be retrieved from API.")
-    
-    logger.info("Successfully retrieved locations data.")
-
-
-    # get weather info from API
-    weather_info={}
-    latlon=locations[["Latitude", "Longitude"]]     # extract latitude and longitude from dataframe
-    size=len(latlon)
-    for i in range(size):
-        # get info
-        response=requests.get(f"http://api.openweathermap.org/data/2.5/weather?lat={float(latlon.iat[i, 0])}&lon={float(latlon.iat[i, 1])}&appid={API_key}")
-        if response.status_code==200:
-            logger.info("Weather info extracted correctly")
-            # save weather data into dictionary
-            weather_response=response.json()
-            weather_sum={"weather": weather_response["main"]}
-            weather_sum["weather"]["timestamp"]=weather_response["dt"]
-            weather_info[locations.iat[i, 0]]=weather_sum
-        else:
-            raise TimeoutError("Weather data could not be extracted.")
-    
-    # return json file
+    weather_info=fetch_data(logger)
+    # return json
     return weather_info
 
 
+
+
+# STORE DATA IN S3 RAW FILES
 @task
 def store_raw_s3(data):
     file_name=str(RAW_DATA_NAME)
@@ -85,7 +53,7 @@ def store_raw_s3(data):
     return file_name
 
 
-#transform raw json data into csv
+# TRANSFORM RAW JSON FILE
 @task
 def transform_weather_data(file_name):
 
@@ -94,18 +62,8 @@ def transform_weather_data(file_name):
     json_text=hook.read_key(key=file_name, bucket_name=BUCKET_NAME)
     jsondict=json.loads(json_text)
 
-    # get columns for dataframe
-    df_columns=["city"]+list(list(list(jsondict.values())[0].values())[0].keys())
-    df=pd.DataFrame(columns=df_columns)
-    for city in jsondict:
-        # flat data
-        data=[city]+list(jsondict[city]["weather"].values())
-        # save data into df
-        logger.info(f"Info:{data}")
-        df.loc[len(df)]=data
-    
-    #converting timestamp
-    df["timestamp"]=pd.to_datetime(df["timestamp"], unit='s', errors='raise', utc=True)
+    # transform data
+    df=transform_data(jsondict, logger)
 
     #load to processed in S3
     csv_file_name=PROCESSED_FILE_NAME
@@ -121,7 +79,7 @@ def transform_weather_data(file_name):
     return csv_file_name
 
 
-
+# LOAD TO POSTGRES
 @task
 def load_to_postgres(csv_file_name):
 
