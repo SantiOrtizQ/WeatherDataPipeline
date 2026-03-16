@@ -5,6 +5,7 @@ import logging
 import pandas as pd
 import json
 from io import StringIO
+
 # postgresHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
@@ -12,7 +13,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
 #variables from config
-from include.config import CONN_ID, RAW_DATA_NAME, BUCKET_NAME, CITIES, API_key, CSV_FILE_NAME
+from include.config import CONN_ID, RAW_DATA_NAME, BUCKET_NAME, CITIES, API_key, CSV_FILE_NAME, POSTGRES_CONN_ID
 
 
 #create logger
@@ -94,13 +95,15 @@ def transform_weather_data(jsondict):
         df.loc[len(df)]=data
     
     #converting timestamp
-    df["timestamp"]=pd.to_datetime(df["timestamp"], unit='s')
+    df["timestamp"]=pd.to_datetime(df["timestamp"], unit='s', errors='raise', utc=True)
     return df
 
 
 
 @task
 def load_to_postgres(df):
+    df=pd.DataFrame(df)
+    '''
     # create file
     file=StringIO()
     df.to_csv(file, index=False)
@@ -111,6 +114,14 @@ def load_to_postgres(df):
         key=CSV_FILE_NAME,
         bucket_name=BUCKET_NAME,
         replace=True
+    )
+    '''
+    hook=PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
+    df.to_sql(
+        name="weather",
+        con=hook.get_sqlalchemy_engine(),
+        if_exists="append",
+        index=False
     )
 
 
