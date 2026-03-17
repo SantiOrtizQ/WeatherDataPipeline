@@ -5,7 +5,8 @@ import logging
 from contextlib import contextmanager
 import pytest
 from airflow.models import DagBag
-
+from include.longtasks import transform_data, get_response
+from unittest.mock import patch
 
 @contextmanager
 def suppress_logging(namespace):
@@ -81,3 +82,35 @@ def test_dag_retries(dag_id, dag, fileloc):
     assert (
         dag.default_args.get("retries", None) >= 2
     ), f"{dag_id} in {fileloc} must have task retries >= 2."
+
+
+
+
+
+
+''' tests for functions in dags '''
+
+# test for transform funciton
+def test_transform_data():
+    input_data=[{
+        "name": "Bogota",
+        "main": {"temp": 20, "humidity": 60, "pressure": 1000},
+        "dt": 12345
+    }]
+
+    df=transform_data(input_data)
+
+    assert not df.empty
+    assert "temp" in df.columns
+
+
+# test for API
+@patch("requests.get")
+def test_fetch(mock_get):
+    mock_get.return_value_status_code=200
+    mock_get.return_value.json.return_value={"test": "data"}
+
+    result=get_response("fake_url")
+
+    assert result=={"test": "data"}
+

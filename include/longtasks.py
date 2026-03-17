@@ -1,61 +1,94 @@
-import pandas as pd
 from include.config import CITIES, API_key
+from concurrent.futures import ThreadPoolExecutor
 import requests
+import pandas as pd
+import time
+
+
+
 
 def fetch_data(logger):
     #create locations info dataframe
-    locations=pd.DataFrame(columns=["City", "Latitude", "Longitude", "Country"])
+    loc_columns=["City", "Latitude", "Longitude", "Country"]
 
-    #get locations info from API
-    for city in CITIES:
-        #get response
-        response=requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={API_key}&units=metric")
-        if response.status_code==200:
-            #convert to json and extract element from the default list
-            data=response.json()[0]
+    #get locations info from API with threadpoolexecutor (if high ammount of cities)
 
-            #delete unwanted info
-            data.pop('local_names', 0)
-            data.pop("state", 0)
-            
-            # save into dataframe
-            locations.loc[len(locations)]=data.values()
-        else:
-            raise TimeoutError("Data could not be retrieved from API.")
+    def fetch_city(city):
+        url=f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={API_key}"
+        response=get_response(url)
+        data=response.json()[0]
+
+        #delete unwanted info
+        data.pop('local_names', 0)
+        data.pop("state", 0)
+
+        return data.values()
     
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        results=list(executor.map(fetch_city, CITIES))
+    
+    locations=pd.DataFrame(results, columns=loc_columns)
+
+
     logger.info("Successfully retrieved locations data.")
+
 
 
     # get weather info from API
     weather_info={}
-    latlon=locations[["Latitude", "Longitude"]]     # extract latitude and longitude from dataframe
-    size=len(latlon)
+    lat_lon=locations[["Latitude", "Longitude"]]     # extract latitude and longitude from dataframe
+    size=len(lat_lon)
     for i in range(size):
         # get info
-        response=requests.get(f"http://api.openweathermap.org/data/2.5/weather?lat={float(latlon.iat[i, 0])}&lon={float(latlon.iat[i, 1])}&appid={API_key}")
-        if response.status_code==200:
-            logger.info("Weather info extracted correctly")
-            # save weather data into dictionary
-            weather_response=response.json()
-            weather_sum={"weather": weather_response["main"]}
-            weather_sum["weather"]["timestamp"]=weather_response["dt"]
-            weather_info[locations.iat[i, 0]]=weather_sum
-        else:
-            raise TimeoutError("Weather data could not be extracted.")
-    
-    # return json file
+        response=get_response(f"http://api.openweathermap.org/data/2.5/weather?lat={float(lat_lon.iat[i, 0])}&lon={float(lat_lon.iat[i, 1])}&appid={API_key}")
+
+        # save weather data into dictionary
+        weather_response=response.json()
+        weather_sum={"weather": weather_response["main"]}
+        weather_sum["weather"]["timestamp"]=weather_response["dt"]
+        weather_info[locations.iat[i, 0]]=weather_sum
+
+        logger.info(f"Weather extracted for city {locations.iat[i, 0]}.")
+
     return weather_info
 
-def transform_data(jsondict, logger):
+
+
+
+# ****** EXTRA FUNCTION: get responses properly *******
+def get_response(url, retries=3, delay=2):
+    for i in range(retries):
+        try:
+            response=requests.get(url, timeout=10)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.RequestException as e:
+            if i==retries-1:
+                raise e
+            time.sleep(delay*(i+1))
+
+
+
+
+
+# transform jsondict into data frame
+
+def transform_data(jsondict):
+
+
     # get columns for dataframe
     df_columns=["city"]+list(list(list(jsondict.values())[0].values())[0].keys())
-    df=pd.DataFrame(columns=df_columns)
+
+    rows=[]
     for city in jsondict:
         # flat data
         data=[city]+list(jsondict[city]["weather"].values())
-        # save data into df
-        logger.info(f"Info:{data}")
-        df.loc[len(df)]=data
+
+        # saving into the rows
+        rows.append(data)
+    
+    # save data into dataframe
+    df=pd.DataFrame(rows, columns=df_columns)
     
     #converting timestamp
     df["timestamp"]=pd.to_datetime(df["timestamp"], unit='s', errors='raise', utc=True)
