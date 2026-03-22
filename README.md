@@ -40,7 +40,7 @@ The DAG runs **hourly**, collecting weather data for 8 cities across 4 continent
 | **Containerization** | Docker |
 | **Cloud Storage** | AWS S3 |
 | **Database** | PostgreSQL |
-| **Language** | Python 3.x |
+| **Language** | Python 3.12 |
 | **Key Libraries** | `pandas`, `requests`, `apache-airflow-providers-amazon`, `apache-airflow-providers-postgres` |
 | **Testing** | `pytest` |
 
@@ -215,10 +215,6 @@ apache-airflow-providers-postgres==6.6.0
 ```
 
 Base image: `astrocrpublic.azurecr.io/runtime:3.1-13`
-
----
-
-## 📄 License
 
 ---
 
